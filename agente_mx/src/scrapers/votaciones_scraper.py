@@ -1,7 +1,5 @@
 """
-Scraper de votaciones nominales de la Cámara de Diputados de México
-Fuente oficial: https://sitl.diputados.gob.mx
-Legislatura LXV (2021-2024)
+Scraper expandido — descarga un rango amplio de votaciones
 """
 
 import requests
@@ -9,46 +7,31 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from pathlib import Path
 from loguru import logger
+import time
 
-# Rutas
 RAW_DIR = Path("agente_mx/data/raw")
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-# URL base del sistema de votaciones
 BASE_URL = "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php"
 
-# Partidos disponibles en el sistema (id: nombre)
 PARTIDOS = {
-    1: "PRI",
-    2: "PAN",
-    3: "Morena",
-    4: "PRD",
-    5: "PVEM",
-    6: "PT",
-    7: "MC",
-    8: "Nueva Alianza",
+    1: "PRI", 2: "PAN", 3: "Morena",
+    4: "PRD", 5: "PVEM", 6: "PT",
+    7: "MC", 8: "Nueva Alianza",
 }
 
 
 def scrape_votacion(partido_id: int, votacion_id: int) -> list[dict]:
-    """
-    Descarga el listado de votos de un partido en una votación específica.
-    Retorna una lista de diccionarios con nombre del diputado y sentido del voto.
-    """
     params = {"partidot": partido_id, "votaciont": votacion_id}
-
     try:
         response = requests.get(BASE_URL, params=params, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "lxml")
-
         registros = []
         tabla = soup.find("table")
         if not tabla:
             return registros
-
-        filas = tabla.find_all("tr")
-        for fila in filas:
+        for fila in tabla.find_all("tr"):
             celdas = fila.find_all("td")
             if len(celdas) >= 3:
                 nombre = celdas[1].get_text(strip=True)
@@ -61,51 +44,52 @@ def scrape_votacion(partido_id: int, votacion_id: int) -> list[dict]:
                         "votacion_id": votacion_id,
                     })
         return registros
-
     except Exception as e:
-        logger.warning(f"Error en partido {partido_id}, votación {votacion_id}: {e}")
+        logger.warning(f"Error partido {partido_id}, votación {votacion_id}: {e}")
         return []
 
 
-def descargar_votaciones(votacion_ids: list[int]) -> pd.DataFrame:
+def descargar_rango(inicio: int, fin: int, pausa: float = 0.3) -> pd.DataFrame:
     """
-    Descarga todas las votaciones indicadas para todos los partidos.
+    Descarga todas las votaciones en el rango [inicio, fin].
+    La pausa evita saturar el servidor oficial.
     """
     todos = []
+    total = (fin - inicio + 1) * len(PARTIDOS)
+    procesados = 0
 
-    for votacion_id in votacion_ids:
-        logger.info(f"Descargando votación #{votacion_id}...")
+    for votacion_id in range(inicio, fin + 1):
+        registros_votacion = []
         for partido_id in PARTIDOS:
             registros = scrape_votacion(partido_id, votacion_id)
-            todos.extend(registros)
+            registros_votacion.extend(registros)
+            procesados += 1
+            time.sleep(pausa)
+
+        if registros_votacion:
+            todos.extend(registros_votacion)
+            logger.info(f"Votación #{votacion_id}: {len(registros_votacion)} registros | Progreso: {procesados}/{total}")
+        else:
+            logger.warning(f"Votación #{votacion_id}: sin datos")
 
     df = pd.DataFrame(todos)
-    logger.success(f"Total de registros descargados: {len(df)}")
+    logger.success(f"Descarga completa. Total registros: {len(df)}")
     return df
 
 
-def guardar_votaciones(df: pd.DataFrame, nombre: str = "votaciones_raw.csv"):
-    """Guarda el DataFrame en la carpeta raw."""
-    if df.empty:
-        logger.warning("No hay datos para guardar.")
-        return
-    ruta = RAW_DIR / nombre
-    df.to_csv(ruta, index=False, encoding="utf-8-sig")
-    logger.success(f"Datos guardados en: {ruta}")
-
-
 if __name__ == "__main__":
-    # Descargamos las primeras 5 votaciones como prueba
-    votaciones_prueba = [42, 43, 44, 45, 46]
+    logger.info("Iniciando descarga expandida de votaciones LXV Legislatura...")
 
-    df = descargar_votaciones(votaciones_prueba)
+    # Descarga votaciones del 1 al 80
+    # Puedes ampliar el rango después (ej. 1 a 200)
+    df = descargar_rango(inicio=1, fin=80)
 
     if not df.empty:
-        print("\n--- Vista previa ---")
-        print(df.head(10))
-        print(f"\nColumnas: {list(df.columns)}")
-        print(f"Total registros: {len(df)}")
-        print(f"\nDistribución de votos:\n{df['voto'].value_counts()}")
-        guardar_votaciones(df)
+        ruta = RAW_DIR / "votaciones_raw.csv"
+        df.to_csv(ruta, index=False, encoding="utf-8-sig")
+        logger.success(f"Guardado en {ruta}")
+        print(f"\nTotal registros: {len(df)}")
+        print(f"Votaciones únicas: {df['votacion_id'].nunique()}")
+        print(f"Distribución de votos:\n{df['voto'].value_counts()}")
     else:
         print("No se obtuvieron datos.")
