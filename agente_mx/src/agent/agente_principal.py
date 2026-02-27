@@ -1,14 +1,19 @@
 """
-Agente principal de AgenteMX
-Usa la API de Anthropic directamente con tool_use nativo
+Agente principal de AgenteMX — versión completa con todas las tools
 """
 
 import sqlite3
-import json
 import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 import anthropic
+import sys
+sys.path.append(".")
+from agente_mx.src.tools.tools_legislativas import (
+    buscar_diputado,
+    resumen_por_partido,
+    detectar_patrones,
+)
 
 load_dotenv()
 
@@ -24,30 +29,56 @@ tools = [
     {
         "name": "consultar_votaciones",
         "description": """Ejecuta una consulta SQL sobre la base de datos de votaciones.
-        La tabla se llama 'votaciones' y tiene las columnas:
-        - diputado: nombre completo
-        - partido: partido político
-        - voto: A favor, En contra, Ausente, Abstención
-        - votacion_id: identificador numérico de la votación""",
+        La tabla se llama 'votaciones' con columnas:
+        diputado, partido, voto (A favor/En contra/Ausente/Abstención), votacion_id.""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query_sql": {
-                    "type": "string",
-                    "description": "La consulta SQL a ejecutar"
-                }
+                "query_sql": {"type": "string", "description": "Consulta SQL a ejecutar"}
             },
             "required": ["query_sql"]
         }
     },
     {
         "name": "resumen_base_datos",
-        "description": "Devuelve un resumen general de los datos: total de registros, partidos y distribución de votos.",
+        "description": "Devuelve resumen general: total de registros, partidos y distribución de votos.",
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "buscar_diputado",
+        "description": "Busca un diputado por nombre y devuelve su historial completo de votaciones.",
         "input_schema": {
             "type": "object",
-            "properties": {}
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre o apellido del diputado a buscar"}
+            },
+            "required": ["nombre"]
         }
-    }
+    },
+    {
+        "name": "resumen_por_partido",
+        "description": "Genera resumen detallado del comportamiento de votación de un partido político.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "partido": {"type": "string", "description": "Nombre del partido político"}
+            },
+            "required": ["partido"]
+        }
+    },
+    {
+        "name": "detectar_patrones",
+        "description": "Detecta patrones relevantes: diputados con muchas ausencias, votaciones divisivas.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "umbral_ausencias": {
+                    "type": "integer",
+                    "description": "Mínimo de ausencias para considerar un diputado como frecuentemente ausente"
+                }
+            }
+        }
+    },
 ]
 
 
@@ -62,22 +93,35 @@ def ejecutar_tool(nombre: str, inputs: dict) -> str:
         if nombre == "consultar_votaciones":
             df = pd.read_sql(inputs["query_sql"], conn)
             conn.close()
-            if df.empty:
-                return "La consulta no devolvió resultados."
-            return df.to_string(index=False)
+            return df.to_string(index=False) if not df.empty else "Sin resultados."
 
         elif nombre == "resumen_base_datos":
             total = pd.read_sql("SELECT COUNT(*) as total FROM votaciones", conn).iloc[0]["total"]
             partidos = pd.read_sql("SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn)
             votos = pd.read_sql(
-                "SELECT voto, COUNT(*) as total FROM votaciones GROUP BY voto ORDER BY total DESC",
-                conn
+                "SELECT voto, COUNT(*) as total FROM votaciones GROUP BY voto ORDER BY total DESC", conn
             )
             conn.close()
-            return f"""Total de registros: {total}
+            return f"""Total registros: {total}
 Partidos: {', '.join(partidos['partido'].tolist())}
-Distribución de votos:
+Votos:
 {votos.to_string(index=False)}"""
+
+        elif nombre == "buscar_diputado":
+            conn.close()
+            return buscar_diputado(inputs["nombre"])
+
+        elif nombre == "resumen_por_partido":
+            conn.close()
+            return resumen_por_partido(inputs["partido"])
+
+        elif nombre == "detectar_patrones":
+            conn.close()
+            umbral = inputs.get("umbral_ausencias", 3)
+            return detectar_patrones(umbral)
+
+        conn.close()
+        return "Tool no reconocida."
 
     except Exception as e:
         return f"Error: {e}"
@@ -105,12 +149,8 @@ def preguntar(pregunta: str) -> str:
             messages=messages,
         )
 
-        # Si el agente quiere usar una tool
         if response.stop_reason == "tool_use":
-            # Agregamos la respuesta del agente al historial
             messages.append({"role": "assistant", "content": response.content})
-
-            # Ejecutamos cada tool que pidió
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
@@ -121,11 +161,8 @@ def preguntar(pregunta: str) -> str:
                         "tool_use_id": block.id,
                         "content": resultado,
                     })
-
-            # Agregamos los resultados al historial
             messages.append({"role": "user", "content": tool_results})
 
-        # Si el agente ya tiene la respuesta final
         elif response.stop_reason == "end_turn":
             for block in response.content:
                 if hasattr(block, "text"):
@@ -138,12 +175,12 @@ def preguntar(pregunta: str) -> str:
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("Iniciando AgenteMX...\n")
+    print("Iniciando AgenteMX — versión completa\n")
 
     preguntas_prueba = [
-        "¿Cuántos registros hay en total en la base de datos?",
-        "¿Qué partido tiene más ausencias?",
-        "¿Cuáles son los 5 diputados con más votos en contra?",
+        "¿Cuál es el resumen general de la base de datos?",
+        "Dame el resumen de votaciones del partido Morena",
+        "¿Qué diputados tienen patrones de ausencia frecuente?",
     ]
 
     for pregunta in preguntas_prueba:
@@ -151,4 +188,4 @@ if __name__ == "__main__":
         print(f"Pregunta: {pregunta}")
         print('='*60)
         respuesta = preguntar(pregunta)
-        print(f"\nRespuesta: {respuesta}")
+        print(f"\nRespuesta:\n{respuesta}")
