@@ -17,7 +17,7 @@ def url_votacion(partido_id: int, votacion_id: int) -> str:
 
 
 PARTIDO_IDS = {
-    "MC": 7, "Morena": 3, "Nueva Alianza": 8,
+    "MC": 7, "Morena": 3,
     "PAN": 2, "PRD": 4, "PRI": 1, "PT": 6, "PVEM": 5
 }
 

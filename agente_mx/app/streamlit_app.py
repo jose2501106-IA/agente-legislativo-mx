@@ -1,5 +1,6 @@
 """
-AgenteMX — Interfaz visual con Streamlit + citas clicables + Termómetro de Disciplina
+AgenteMX — Interfaz visual con Streamlit
+Fases: Datos + Agente + Disciplina + Contradicciones + Radar Electoral
 """
 
 import streamlit as st
@@ -19,6 +20,11 @@ from agente_mx.src.tools.tool_disciplina import (
     calcular_disciplina_partido,
     comparar_disciplina_partidos,
 )
+from agente_mx.src.tools.tool_contradicciones import detectar_contradicciones
+from agente_mx.src.tools.tool_radar_electoral import (
+    radar_electoral_partido,
+    radar_comparativo_partidos,
+)
 
 load_dotenv()
 
@@ -35,25 +41,19 @@ st.title("🏛️ AgenteMX")
 st.caption("Agente de IA para transparencia legislativa en México · Cámara de Diputados LXV Legislatura")
 st.divider()
 
-# ─────────────────────────────────────────────
-# TOOLS
-# ─────────────────────────────────────────────
-
 tools = [
     {
         "name": "consultar_votaciones",
-        "description": "Ejecuta SQL sobre la tabla 'votaciones' con columnas: diputado, partido, voto, votacion_id.",
+        "description": "Ejecuta SQL sobre la tabla votaciones con columnas: diputado, partido, voto, votacion_id.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "query_sql": {"type": "string", "description": "Consulta SQL"}
-            },
+            "properties": {"query_sql": {"type": "string"}},
             "required": ["query_sql"]
         }
     },
     {
         "name": "resumen_base_datos",
-        "description": "Resumen general: total registros, partidos y distribución de votos.",
+        "description": "Resumen general: total registros, partidos y distribucion de votos.",
         "input_schema": {"type": "object", "properties": {}}
     },
     {
@@ -61,20 +61,16 @@ tools = [
         "description": "Busca diputado por nombre y devuelve historial de votaciones.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "nombre": {"type": "string"}
-            },
+            "properties": {"nombre": {"type": "string"}},
             "required": ["nombre"]
         }
     },
     {
         "name": "resumen_por_partido",
-        "description": "Resumen de votaciones de un partido político.",
+        "description": "Resumen de votaciones de un partido politico.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "partido": {"type": "string"}
-            },
+            "properties": {"partido": {"type": "string"}},
             "required": ["partido"]
         }
     },
@@ -83,41 +79,52 @@ tools = [
         "description": "Detecta patrones: ausencias frecuentes y votaciones divisivas.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "umbral_ausencias": {"type": "integer"}
-            }
+            "properties": {"umbral_ausencias": {"type": "integer"}}
         }
     },
     {
         "name": "calcular_disciplina_partido",
-        "description": """Calcula el índice de disciplina partidista de cada diputado de un partido.
-        Determina qué tan seguido cada diputado vota alineado con la línea oficial de su partido.
-        Identifica disidentes internos y los más disciplinados. Devuelve un índice del 0 al 100.""",
+        "description": "Calcula indice de disciplina partidista del 0 al 100 por diputado. Identifica disidentes.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "partido": {"type": "string", "description": "Nombre del partido político"}
-            },
+            "properties": {"partido": {"type": "string"}},
             "required": ["partido"]
         }
     },
     {
         "name": "comparar_disciplina_partidos",
-        "description": """Compara el índice de disciplina promedio entre todos los partidos políticos.
-        Útil para saber qué partido tiene más cohesión interna y cuál tiene más disidencia.""",
+        "description": "Compara indice de disciplina promedio entre todos los partidos.",
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "detectar_contradicciones",
+        "description": "Detecta contradicciones entre iniciativas presentadas y votaciones reales de un partido.",
         "input_schema": {
             "type": "object",
-            "properties": {}
+            "properties": {"partido": {"type": "string"}},
+            "required": ["partido"]
         }
+    },
+    {
+        "name": "radar_electoral_partido",
+        "description": """Analiza si el comportamiento de voto de un partido cambia
+        en periodos electorales vs normales. Detecta si los diputados reducen ausencias
+        o cambian su voto cerca de las elecciones. Muy util para analisis politico estrategico.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {"partido": {"type": "string"}},
+            "required": ["partido"]
+        }
+    },
+    {
+        "name": "radar_comparativo_partidos",
+        "description": "Compara como cambia el comportamiento electoral de todos los partidos en periodo electoral.",
+        "input_schema": {"type": "object", "properties": {}}
     },
 ]
 
 
-# ─────────────────────────────────────────────
-# EJECUTAR TOOL
-# ─────────────────────────────────────────────
-
-def ejecutar_tool(nombre: str, inputs: dict) -> tuple[str, list[dict]]:
+def ejecutar_tool(nombre, inputs):
     try:
         conn = sqlite3.connect(DB_PATH)
 
@@ -136,12 +143,13 @@ def ejecutar_tool(nombre: str, inputs: dict) -> tuple[str, list[dict]]:
             fuentes = [{
                 "votacion_id": "general",
                 "url": "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php",
-                "label": "Portal oficial de votaciones — Cámara de Diputados LXV"
+                "label": "Portal oficial de votaciones — Camara de Diputados LXV"
             }]
-            return f"""Total registros: {total}
-Partidos: {', '.join(partidos['partido'].tolist())}
-Votos:
-{votos.to_string(index=False)}""", fuentes
+            return (
+                f"Total registros: {total}\n"
+                f"Partidos: {', '.join(partidos['partido'].tolist())}\n"
+                f"Votos:\n{votos.to_string(index=False)}"
+            ), fuentes
 
         elif nombre == "buscar_diputado":
             conn.close()
@@ -163,6 +171,18 @@ Votos:
             conn.close()
             return comparar_disciplina_partidos()
 
+        elif nombre == "detectar_contradicciones":
+            conn.close()
+            return detectar_contradicciones(inputs["partido"])
+
+        elif nombre == "radar_electoral_partido":
+            conn.close()
+            return radar_electoral_partido(inputs["partido"])
+
+        elif nombre == "radar_comparativo_partidos":
+            conn.close()
+            return radar_comparativo_partidos()
+
         conn.close()
         return "Tool no reconocida.", []
 
@@ -170,18 +190,14 @@ Votos:
         return f"Error: {e}", []
 
 
-# ─────────────────────────────────────────────
-# AGENTE
-# ─────────────────────────────────────────────
-
-SYSTEM_PROMPT = """Eres AgenteMX, asistente de transparencia legislativa de México.
+SYSTEM_PROMPT = """Eres AgenteMX, asistente de transparencia legislativa de Mexico.
 Usa siempre las herramientas para responder con datos reales.
-Cuando menciones votaciones específicas, incluye el número de votación entre corchetes así: [N]
-donde N corresponde al índice de la fuente que te será proporcionada.
-Responde en español, claro y accesible. Nunca inventes datos."""
+Cuando menciones votaciones especificas incluye el numero entre corchetes asi: [N]
+donde N corresponde al indice de la fuente proporcionada.
+Responde en espanol, claro y accesible. Nunca inventes datos."""
 
 
-def preguntar(pregunta: str, historial: list) -> tuple[str, list[str], list[dict]]:
+def preguntar(pregunta, historial):
     client = anthropic.Anthropic()
     messages = historial + [{"role": "user", "content": pregunta}]
     tools_usadas = []
@@ -199,23 +215,20 @@ def preguntar(pregunta: str, historial: list) -> tuple[str, list[str], list[dict
         if response.stop_reason == "tool_use":
             messages.append({"role": "assistant", "content": response.content})
             tool_results = []
-
             for block in response.content:
                 if block.type == "tool_use":
                     tools_usadas.append(block.name)
                     resultado, fuentes = ejecutar_tool(block.name, block.input)
                     todas_las_fuentes.extend(fuentes)
-
                     if fuentes:
                         fuentes_texto = "\n\nFuentes disponibles:\n" + "\n".join(
                             [f"[{i+1}] {f['label']}" for i, f in enumerate(fuentes)]
                         )
                         resultado += fuentes_texto
-
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": resultado,
+                        "content": resultado
                     })
             messages.append({"role": "user", "content": tool_results})
 
@@ -226,52 +239,45 @@ def preguntar(pregunta: str, historial: list) -> tuple[str, list[str], list[dict
             return "Sin respuesta.", tools_usadas, todas_las_fuentes
 
 
-def renderizar_citas(texto: str, fuentes: list[dict]) -> str:
-    """Convierte [N] en superíndices HTML clicables."""
+def renderizar_citas(texto, fuentes):
     for i, fuente in enumerate(fuentes):
         n = i + 1
-        enlace = f'<sup><a href="{fuente["url"]}" target="_blank" title="{fuente["label"]}">[{n}]</a></sup>'
+        enlace = (
+            f'<sup><a href="{fuente["url"]}" target="_blank" '
+            f'title="{fuente["label"]}">[{n}]</a></sup>'
+        )
         texto = texto.replace(f"[{n}]", enlace)
     return texto
 
 
-# ─────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────
-
 with st.sidebar:
     st.header("🔍 Preguntas de ejemplo")
-
     preguntas_ejemplo = [
-        "¿Cuántos registros hay en la base de datos?",
-        "¿Qué partido tiene más ausencias?",
+        "¿Cuantos registros hay en la base de datos?",
+        "¿Que partido tiene mas ausencias?",
         "Dame el resumen del partido PAN",
-        "¿Qué diputados tienen patrones de ausencia frecuente?",
+        "¿Que diputados tienen patrones de ausencia frecuente?",
         "Busca al diputado Garza",
-        "¿Cuál es el índice de disciplina de Morena?",
+        "¿Cual es el indice de disciplina de Morena?",
         "Compara la disciplina entre todos los partidos",
-        "¿Quiénes son los diputados más disidentes del PRI?",
+        "¿Quienes son los diputados mas disidentes del PRI?",
+        "¿Hay contradicciones entre las iniciativas y votos del PAN?",
+        "Analiza las contradicciones politicas de Morena",
+        "¿Cambia el comportamiento electoral de Morena en año electoral?",
+        "Compara el radar electoral de todos los partidos",
     ]
-
     for p in preguntas_ejemplo:
         if st.button(p, use_container_width=True):
             st.session_state["pregunta_ejemplo"] = p
-
     st.divider()
     st.markdown("**Fuente de datos:**")
     st.markdown("[sitl.diputados.gob.mx](https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php)")
     st.markdown("**Modelo IA:**")
     st.markdown(f"`{MODEL}`")
-
-    if st.button("🗑️ Limpiar conversación", use_container_width=True):
+    if st.button("🗑️ Limpiar conversacion", use_container_width=True):
         st.session_state["mensajes"] = []
         st.session_state["historial_agente"] = []
         st.rerun()
-
-
-# ─────────────────────────────────────────────
-# ESTADO
-# ─────────────────────────────────────────────
 
 if "mensajes" not in st.session_state:
     st.session_state["mensajes"] = []
@@ -279,11 +285,6 @@ if "historial_agente" not in st.session_state:
     st.session_state["historial_agente"] = []
 if "pregunta_ejemplo" not in st.session_state:
     st.session_state["pregunta_ejemplo"] = ""
-
-
-# ─────────────────────────────────────────────
-# HISTORIAL DEL CHAT
-# ─────────────────────────────────────────────
 
 for mensaje in st.session_state["mensajes"]:
     with st.chat_message(mensaje["role"]):
@@ -295,14 +296,8 @@ for mensaje in st.session_state["mensajes"]:
                     st.markdown(f"**[{i+1}]** [{f['label']}]({f['url']})")
         else:
             st.markdown(mensaje["content"])
-
         if mensaje.get("tools_usadas"):
             st.caption(f"🔧 {' · '.join(mensaje['tools_usadas'])}")
-
-
-# ─────────────────────────────────────────────
-# INPUT DEL USUARIO
-# ─────────────────────────────────────────────
 
 pregunta_inicial = st.session_state.pop("pregunta_ejemplo", "") or ""
 pregunta = st.chat_input("Escribe tu pregunta sobre los diputados mexicanos...")
@@ -320,15 +315,12 @@ if pregunta:
             respuesta, tools_usadas, fuentes = preguntar(
                 pregunta, st.session_state["historial_agente"]
             )
-
         html = renderizar_citas(respuesta, fuentes)
         st.markdown(html, unsafe_allow_html=True)
-
         if fuentes:
             with st.expander("📎 Ver fuentes"):
                 for i, f in enumerate(fuentes):
                     st.markdown(f"**[{i+1}]** [{f['label']}]({f['url']})")
-
         if tools_usadas:
             st.caption(f"🔧 {' · '.join(tools_usadas)}")
 
@@ -338,6 +330,5 @@ if pregunta:
         "tools_usadas": tools_usadas,
         "fuentes": fuentes,
     })
-
     st.session_state["historial_agente"].append({"role": "user", "content": pregunta})
     st.session_state["historial_agente"].append({"role": "assistant", "content": respuesta})

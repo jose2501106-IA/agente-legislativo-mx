@@ -17,7 +17,7 @@ BASE_URL = "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php"
 PARTIDOS = {
     1: "PRI", 2: "PAN", 3: "Morena",
     4: "PRD", 5: "PVEM", 6: "PT",
-    7: "MC", 8: "Nueva Alianza",
+    7: "MC",
 }
 
 
