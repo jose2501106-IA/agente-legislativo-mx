@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.db
+*.sqlite3
+agente_mx/data/raw/*
+agente_mx/data/processed/*
+.ipynb_checkpoints/
