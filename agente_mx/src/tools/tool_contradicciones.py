@@ -9,14 +9,13 @@ import pandas as pd
 import anthropic
 from pathlib import Path
 from dotenv import load_dotenv
+from agente_mx.src.utils.url_builder import url_contradicciones
 
 load_dotenv()
 
 DB_PATH = Path("agente_mx/data/agente_mx.db")
 RAW_DIR = Path("agente_mx/data/raw")
-BASE_URL = "https://gaceta.diputados.gob.mx"
 
-# Temas políticos y cómo se manifiestan en votaciones
 TEMAS_KEYWORDS = {
     "seguridad": ["seguridad", "penal", "delito", "crimen", "policía", "fuerzas armadas"],
     "educación": ["educación", "escuela", "maestro", "enseñanza", "universitaria"],
@@ -30,7 +29,6 @@ TEMAS_KEYWORDS = {
 
 
 def cargar_iniciativas() -> pd.DataFrame:
-    """Carga las iniciativas del CSV."""
     ruta = RAW_DIR / "iniciativas_raw.csv"
     if not ruta.exists():
         return pd.DataFrame()
@@ -38,7 +36,6 @@ def cargar_iniciativas() -> pd.DataFrame:
 
 
 def detectar_tema(titulo: str) -> str:
-    """Detecta el tema principal de una iniciativa por keywords."""
     titulo_lower = titulo.lower()
     for tema, keywords in TEMAS_KEYWORDS.items():
         if any(k in titulo_lower for k in keywords):
@@ -51,10 +48,6 @@ def analizar_contradiccion_con_ia(
     iniciativa: str,
     votos_relacionados: pd.DataFrame,
 ) -> str:
-    """
-    Usa Claude para analizar si existe contradicción entre
-    la iniciativa presentada y los votos del partido.
-    """
     client = anthropic.Anthropic()
 
     resumen_votos = votos_relacionados[["diputado", "voto", "votacion_id"]].to_string(index=False)
@@ -87,9 +80,6 @@ para detectar contradicción, dilo claramente."""
 
 
 def detectar_contradicciones(partido: str) -> tuple[str, list[dict]]:
-    """
-    Detecta posibles contradicciones entre iniciativas y votaciones de un partido.
-    """
     try:
         iniciativas_df = cargar_iniciativas()
         if iniciativas_df.empty:
@@ -105,24 +95,19 @@ def detectar_contradicciones(partido: str) -> tuple[str, list[dict]]:
         if votaciones_df.empty:
             return f"No hay votaciones registradas para {partido}.", []
 
-        # Filtra iniciativas del partido
         iniciativas_partido = iniciativas_df[
             iniciativas_df["presentada_por"].str.contains(partido, case=False, na=False)
         ]
 
         if iniciativas_partido.empty:
-            # Usa todas las iniciativas como contexto general
             iniciativas_partido = iniciativas_df.head(4)
 
         reporte_partes = [f"DETECTOR DE CONTRADICCIONES — {partido}\n{'═'*50}\n"]
-        fuentes = []
+        fuentes = url_contradicciones(partido)
         contradicciones_encontradas = 0
 
         for _, iniciativa in iniciativas_partido.head(4).iterrows():
             tema = detectar_tema(iniciativa["titulo"])
-
-            # Obtiene votos en contra del partido (señal de posible contradicción)
-            votos_en_contra = votaciones_df[votaciones_df["voto"] == "En contra"]
 
             analisis = analizar_contradiccion_con_ia(
                 partido=partido,
@@ -137,12 +122,6 @@ def detectar_contradicciones(partido: str) -> tuple[str, list[dict]]:
 🤖 Análisis IA:
 {analisis}
 {'─'*50}""")
-
-            fuentes.append({
-                "votacion_id": tema,
-                "url": iniciativa.get("url", BASE_URL),
-                "label": f"Iniciativa: {iniciativa['titulo'][:60]}...",
-            })
 
             contradicciones_encontradas += 1
 

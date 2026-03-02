@@ -1,31 +1,21 @@
 """
-Tools especializadas para AgenteMX — con URLs de fuente oficial
+Tools especializadas para AgenteMX — con URLs precisas de fuente oficial
 """
 
 import sqlite3
 import pandas as pd
 from pathlib import Path
+from agente_mx.src.utils.url_builder import (
+    url_votacion_partido,
+    url_buscar_diputado,
+    url_todas_votaciones_partido,
+    url_patrones_generales,
+)
 
 DB_PATH = Path("agente_mx/data/agente_mx.db")
 
-# URL base del sistema oficial
-BASE_URL = "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php"
-
-
-def url_votacion(partido_id: int, votacion_id: int) -> str:
-    return f"{BASE_URL}?partidot={partido_id}&votaciont={votacion_id}"
-
-
-PARTIDO_IDS = {
-    "MC": 7, "Morena": 3,
-    "PAN": 2, "PRD": 4, "PRI": 1, "PT": 6, "PVEM": 5
-}
-
 
 def buscar_diputado(nombre: str) -> tuple[str, list[dict]]:
-    """
-    Retorna (resumen_texto, lista_de_fuentes)
-    """
     try:
         conn = sqlite3.connect(DB_PATH)
         query = """
@@ -48,40 +38,37 @@ def buscar_diputado(nombre: str) -> tuple[str, list[dict]]:
         ausente = len(df[df["voto"] == "Ausente"])
         abstencion = len(df[df["voto"] == "Abstención"])
 
-        partido_id = PARTIDO_IDS.get(partido, 1)
-
-        # Genera fuentes con URL por cada votación
-        fuentes = []
-        for _, row in df.iterrows():
-            fuentes.append({
-                "votacion_id": int(row["votacion_id"]),
-                "url": url_votacion(partido_id, int(row["votacion_id"])),
-                "label": f"Votación #{int(row['votacion_id'])} — {row['voto']}"
-            })
+        fuentes = url_buscar_diputado(partido, df["votacion_id"].tolist())
 
         resumen = f"""
 Diputado: {diputado_nombre}
 Partido: {partido}
-Total votaciones: {total}
+Total de votaciones registradas: {total}
 - A favor: {a_favor}
 - En contra: {en_contra}
 - Ausente: {ausente}
 - Abstención: {abstencion}
 
-Detalle:
+Detalle por votación:
 {df[['votacion_id', 'voto']].to_string(index=False)}
         """
         return resumen.strip(), fuentes
 
     except Exception as e:
-        return f"Error: {e}", []
+        return f"Error al buscar diputado: {e}", []
 
 
 def resumen_por_partido(partido: str) -> tuple[str, list[dict]]:
     try:
         conn = sqlite3.connect(DB_PATH)
-        partidos_df = pd.read_sql("SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn)
-        partidos_disponibles = partidos_df["partido"].tolist()
+
+        partidos_df = pd.read_sql(
+            "SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn
+        )
+        partidos_disponibles = [
+            p for p in partidos_df["partido"].tolist()
+            if p != "Nueva Alianza"
+        ]
 
         partido_match = None
         for p in partidos_disponibles:
@@ -91,55 +78,56 @@ def resumen_por_partido(partido: str) -> tuple[str, list[dict]]:
 
         if not partido_match:
             conn.close()
-            return f"Partido '{partido}' no encontrado. Disponibles: {', '.join(partidos_disponibles)}", []
+            return (
+                f"Partido '{partido}' no encontrado. "
+                f"Partidos disponibles: {', '.join(partidos_disponibles)}",
+                []
+            )
 
         stats = pd.read_sql(
-            "SELECT voto, COUNT(*) as total FROM votaciones WHERE partido=:p GROUP BY voto ORDER BY total DESC",
+            "SELECT voto, COUNT(*) as total FROM votaciones WHERE partido = :p GROUP BY voto ORDER BY total DESC",
             conn, params={"p": partido_match}
         )
         ausencias = pd.read_sql(
             """SELECT diputado, COUNT(*) as ausencias FROM votaciones
-               WHERE partido=:p AND voto='Ausente'
+               WHERE partido = :p AND voto = 'Ausente'
                GROUP BY diputado ORDER BY ausencias DESC LIMIT 5""",
             conn, params={"p": partido_match}
         )
         disciplina = pd.read_sql(
             """SELECT diputado, COUNT(*) as votos_favor FROM votaciones
-               WHERE partido=:p AND voto='A favor'
+               WHERE partido = :p AND voto = 'A favor'
                GROUP BY diputado ORDER BY votos_favor DESC LIMIT 5""",
             conn, params={"p": partido_match}
         )
         votaciones_ids = pd.read_sql(
-            "SELECT DISTINCT votacion_id FROM votaciones WHERE partido=:p ORDER BY votacion_id",
+            "SELECT DISTINCT votacion_id FROM votaciones WHERE partido = :p ORDER BY votacion_id",
             conn, params={"p": partido_match}
         )
         conn.close()
 
-        partido_id = PARTIDO_IDS.get(partido_match, 1)
         fuentes = [
-            {
-                "votacion_id": int(vid),
-                "url": url_votacion(partido_id, int(vid)),
-                "label": f"Votación #{int(vid)} — {partido_match}"
-            }
-            for vid in votaciones_ids["votacion_id"]
+            url_votacion_partido(partido_match, int(vid))
+            for vid in votaciones_ids["votacion_id"].tolist()[:4]
         ]
+        fuentes.append(url_todas_votaciones_partido(partido_match))
 
         resumen = f"""
 Partido: {partido_match}
+─────────────────────────────
 Distribución de votos:
 {stats.to_string(index=False)}
 
-Top 5 con más ausencias:
+Top 5 diputados con más ausencias:
 {ausencias.to_string(index=False) if not ausencias.empty else 'Sin datos'}
 
-Top 5 más disciplinados:
+Top 5 diputados más disciplinados (más votos a favor):
 {disciplina.to_string(index=False) if not disciplina.empty else 'Sin datos'}
         """
         return resumen.strip(), fuentes
 
     except Exception as e:
-        return f"Error: {e}", []
+        return f"Error al generar resumen del partido: {e}", []
 
 
 def detectar_patrones(umbral_ausencias: int = 3) -> tuple[str, list[dict]]:
@@ -148,40 +136,45 @@ def detectar_patrones(umbral_ausencias: int = 3) -> tuple[str, list[dict]]:
 
         ausentes = pd.read_sql(f"""
             SELECT diputado, partido, COUNT(*) as ausencias
-            FROM votaciones WHERE voto='Ausente'
+            FROM votaciones
+            WHERE voto = 'Ausente' AND partido != 'Nueva Alianza'
             GROUP BY diputado, partido
             HAVING ausencias >= {umbral_ausencias}
-            ORDER BY ausencias DESC LIMIT 10
+            ORDER BY ausencias DESC
+            LIMIT 10
         """, conn)
 
         divisivas = pd.read_sql("""
             SELECT votacion_id,
-                   SUM(CASE WHEN voto='A favor' THEN 1 ELSE 0 END) as a_favor,
-                   SUM(CASE WHEN voto='En contra' THEN 1 ELSE 0 END) as en_contra,
-                   SUM(CASE WHEN voto='Ausente' THEN 1 ELSE 0 END) as ausentes
-            FROM votaciones GROUP BY votacion_id
-            HAVING en_contra > 0 ORDER BY en_contra DESC LIMIT 5
+                   SUM(CASE WHEN voto = 'A favor' THEN 1 ELSE 0 END) as a_favor,
+                   SUM(CASE WHEN voto = 'En contra' THEN 1 ELSE 0 END) as en_contra,
+                   SUM(CASE WHEN voto = 'Ausente' THEN 1 ELSE 0 END) as ausentes
+            FROM votaciones
+            GROUP BY votacion_id
+            HAVING en_contra > 0
+            ORDER BY en_contra DESC
+            LIMIT 5
         """, conn)
         conn.close()
 
-        # Fuentes de las votaciones divisivas
-        fuentes = [
-            {
-                "votacion_id": int(row["votacion_id"]),
-                "url": f"{BASE_URL}?partidot=1&votaciont={int(row['votacion_id'])}",
-                "label": f"Votación #{int(row['votacion_id'])} — {int(row['en_contra'])} votos en contra"
-            }
-            for _, row in divisivas.iterrows()
-        ]
+        fuentes = url_patrones_generales()
+        for _, row in divisivas.iterrows():
+            fuentes.append({
+                "url": f"https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php?partidot=1&votaciont={int(row['votacion_id'])}",
+                "label": f"Votación #{int(row['votacion_id'])} — {int(row['en_contra'])} votos en contra · Registro oficial"
+            })
 
         reporte = f"""
-Diputados con {umbral_ausencias}+ ausencias:
-{ausentes.to_string(index=False) if not ausentes.empty else 'Ninguno'}
+PATRONES DETECTADOS EN LA BASE DE DATOS
+════════════════════════════════════════
 
-Votaciones más divisivas:
+Diputados con {umbral_ausencias} o más ausencias:
+{ausentes.to_string(index=False) if not ausentes.empty else 'Ninguno con ese umbral'}
+
+Votaciones más divisivas (con más votos en contra):
 {divisivas.to_string(index=False) if not divisivas.empty else 'Sin datos'}
         """
         return reporte.strip(), fuentes
 
     except Exception as e:
-        return f"Error: {e}", []
+        return f"Error al detectar patrones: {e}", []

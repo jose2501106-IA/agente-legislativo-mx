@@ -240,6 +240,7 @@ def preguntar(pregunta, historial):
 
 
 def renderizar_citas(texto, fuentes):
+    # Reemplaza [N] si Claude los incluyó
     for i, fuente in enumerate(fuentes):
         n = i + 1
         enlace = (
@@ -247,8 +248,16 @@ def renderizar_citas(texto, fuentes):
             f'title="{fuente["label"]}">[{n}]</a></sup>'
         )
         texto = texto.replace(f"[{n}]", enlace)
-    return texto
 
+    # Agrega superíndices al final del texto automáticamente
+    if fuentes:
+        referencias = "<br><br><small><b>Fuentes:</b> " + " ".join([
+            f'<sup><a href="{f["url"]}" target="_blank" title="{f["label"]}">[{i+1}]</a></sup> {f["label"]}'
+            for i, f in enumerate(fuentes)
+        ]) + "</small>"
+        texto += referencias
+
+    return texto
 
 with st.sidebar:
     st.header("🔍 Preguntas de ejemplo")

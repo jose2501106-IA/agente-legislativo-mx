@@ -6,29 +6,25 @@ Calcula qué tan alineado vota cada diputado con su partido
 import sqlite3
 import pandas as pd
 from pathlib import Path
+from agente_mx.src.utils.url_builder import (
+    url_disciplina_partido,
+    url_comparativa_partidos,
+)
 
 DB_PATH = Path("agente_mx/data/agente_mx.db")
-BASE_URL = "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php"
-
-PARTIDO_IDS = {
-    "MC": 7, "Morena": 3,
-    "PAN": 2, "PRD": 4, "PRI": 1, "PT": 6, "PVEM": 5
-}
 
 
 def calcular_disciplina_partido(partido: str) -> tuple[str, list[dict]]:
-    """
-    Para cada votación, determina el voto mayoritario del partido (línea oficial).
-    Luego calcula qué tan seguido cada diputado siguió esa línea.
-    Retorna un índice de disciplina del 0 al 100 por diputado.
-    """
     try:
         conn = sqlite3.connect(DB_PATH)
 
         partidos_df = pd.read_sql(
             "SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn
         )
-        partidos_disponibles = partidos_df["partido"].tolist()
+        partidos_disponibles = [
+            p for p in partidos_df["partido"].tolist()
+            if p != "Nueva Alianza"
+        ]
 
         partido_match = None
         for p in partidos_disponibles:
@@ -52,7 +48,6 @@ def calcular_disciplina_partido(partido: str) -> tuple[str, list[dict]]:
         if df.empty:
             return "No hay datos para ese partido.", []
 
-        # Determina la línea oficial por votación (voto más frecuente del partido)
         linea_oficial = (
             df[df["voto"].isin(["A favor", "En contra", "Abstención"])]
             .groupby("votacion_id")["voto"]
@@ -61,10 +56,8 @@ def calcular_disciplina_partido(partido: str) -> tuple[str, list[dict]]:
             .rename(columns={"voto": "linea_oficial"})
         )
 
-        # Cruza con los votos individuales
         df_merged = df.merge(linea_oficial, on="votacion_id", how="left")
 
-        # Calcula disciplina por diputado
         resultados = []
         for diputado, grupo in df_merged.groupby("diputado"):
             total = len(grupo[grupo["voto"].isin(["A favor", "En contra", "Abstención"])])
@@ -96,19 +89,10 @@ def calcular_disciplina_partido(partido: str) -> tuple[str, list[dict]]:
         promedio = round(resultado_df["disciplina_%"].mean(), 1)
         muy_disciplinados = len(resultado_df[resultado_df["disciplina_%"] >= 90])
         disidentes = len(resultado_df[resultado_df["disciplina_%"] < 70])
-
         top_disidentes = resultado_df.head(5)
         top_disciplinados = resultado_df.tail(5).iloc[::-1]
 
-        partido_id = PARTIDO_IDS.get(partido_match, 1)
-
-        fuentes = [
-            {
-                "votacion_id": f"disciplina_{partido_match}",
-                "url": f"{BASE_URL}?partidot={partido_id}&votaciont=1",
-                "label": f"Votaciones nominales — {partido_match} · Cámara de Diputados LXV"
-            }
-        ]
+        fuentes = url_disciplina_partido(partido_match)
 
         reporte = f"""
 TERMÓMETRO DE DISCIPLINA PARTIDISTA — {partido_match}
@@ -135,9 +119,6 @@ Ranking completo:
 
 
 def comparar_disciplina_partidos() -> tuple[str, list[dict]]:
-    """
-    Compara el índice de disciplina promedio entre todos los partidos.
-    """
     try:
         conn = sqlite3.connect(DB_PATH)
         partidos = pd.read_sql(
@@ -145,7 +126,6 @@ def comparar_disciplina_partidos() -> tuple[str, list[dict]]:
         )
         conn.close()
 
-        # Filtra Nueva Alianza si quedara algún registro
         partidos_lista = [
             p for p in partidos["partido"].tolist()
             if p != "Nueva Alianza"
@@ -170,13 +150,7 @@ def comparar_disciplina_partidos() -> tuple[str, list[dict]]:
             "disciplina_promedio_%", ascending=False
         )
 
-        fuentes = [
-            {
-                "votacion_id": "comparativa_disciplina",
-                "url": BASE_URL,
-                "label": "Votaciones nominales — Todos los partidos · Cámara de Diputados LXV"
-            }
-        ]
+        fuentes = url_comparativa_partidos()
 
         reporte = f"""
 COMPARATIVA DE DISCIPLINA ENTRE PARTIDOS

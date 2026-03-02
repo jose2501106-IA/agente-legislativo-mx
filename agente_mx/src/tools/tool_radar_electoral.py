@@ -8,14 +8,26 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from loguru import logger
+from agente_mx.src.utils.url_builder import (
+    url_radar_electoral,
+    url_comparativa_partidos,
+)
 
 DB_PATH = Path("agente_mx/data/agente_mx.db")
 RAW_DIR = Path("agente_mx/data/raw")
-BASE_URL = "https://sitl.diputados.gob.mx/LXV_leg/listados_votacionesnplxv.php"
+
+PERIODOS_SESIONES = [
+    {"inicio": 1,  "fin": 15, "fecha": "2021-10-15", "periodo": "1er Periodo Ordinario 2021", "ano_electoral": False},
+    {"inicio": 16, "fin": 30, "fecha": "2021-11-20", "periodo": "1er Periodo Ordinario 2021", "ano_electoral": False},
+    {"inicio": 31, "fin": 45, "fecha": "2022-02-10", "periodo": "2do Periodo Ordinario 2022", "ano_electoral": False},
+    {"inicio": 46, "fin": 60, "fecha": "2022-04-05", "periodo": "2do Periodo Ordinario 2022", "ano_electoral": False},
+    {"inicio": 61, "fin": 80, "fecha": "2022-10-20", "periodo": "1er Periodo Ordinario 2022", "ano_electoral": False},
+]
+
+ANOS_ELECTORALES = [2024]
 
 
 def cargar_contexto_electoral() -> pd.DataFrame:
-    """Carga el catálogo de fechas y contexto electoral."""
     ruta = RAW_DIR / "fechas_votaciones.csv"
     if not ruta.exists():
         return pd.DataFrame()
@@ -23,20 +35,19 @@ def cargar_contexto_electoral() -> pd.DataFrame:
 
 
 def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
-    """
-    Compara el comportamiento de votación de un partido
-    en períodos electorales vs no electorales.
-    """
     try:
         contexto_df = cargar_contexto_electoral()
         if contexto_df.empty:
-            return "Ejecuta primero el scraper de fechas (paso 52).", []
+            return "Ejecuta primero el scraper de fechas (fechas_scraper.py).", []
 
         conn = sqlite3.connect(DB_PATH)
         partidos_df = pd.read_sql(
             "SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn
         )
-        partidos_disponibles = partidos_df["partido"].tolist()
+        partidos_disponibles = [
+            p for p in partidos_df["partido"].tolist()
+            if p != "Nueva Alianza"
+        ]
 
         partido_match = None
         for p in partidos_disponibles:
@@ -54,7 +65,6 @@ def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
         )
         conn.close()
 
-        # Une votaciones con contexto electoral
         df = votaciones_df.merge(
             contexto_df[["votacion_id", "fecha_aproximada", "periodo_sesiones", "ano_electoral", "periodo_campana"]],
             on="votacion_id",
@@ -64,13 +74,12 @@ def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
         if df.empty:
             return "No hay datos suficientes para el análisis.", []
 
-        # Separa períodos electorales vs normales
         electoral = df[df["ano_electoral"] == True]
         normal = df[df["ano_electoral"] == False]
 
         def calcular_stats(subset: pd.DataFrame, label: str) -> dict:
             if subset.empty:
-                return {"periodo": label, "total": 0}
+                return {"periodo": label, "total_votos": 0, "pct_a_favor": 0, "pct_ausente": 0, "pct_en_contra": 0}
             total = len(subset)
             a_favor = len(subset[subset["voto"] == "A favor"])
             ausente = len(subset[subset["voto"] == "Ausente"])
@@ -86,11 +95,9 @@ def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
         stats_normal = calcular_stats(normal, "Periodo normal")
         stats_electoral = calcular_stats(electoral, "Periodo electoral")
 
-        # Calcula diferencias
         diff_favor = stats_electoral.get("pct_a_favor", 0) - stats_normal.get("pct_a_favor", 0)
         diff_ausente = stats_electoral.get("pct_ausente", 0) - stats_normal.get("pct_ausente", 0)
 
-        # Interpreta el cambio
         if abs(diff_favor) < 1 and abs(diff_ausente) < 1:
             interpretacion = "No se detectan cambios significativos de comportamiento en período electoral."
         elif diff_ausente < -2:
@@ -102,7 +109,6 @@ def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
         else:
             interpretacion = f"Cambio marginal en comportamiento electoral (diferencia de {diff_favor:+.1f}% en votos a favor)."
 
-        # Diputados con más cambio de comportamiento
         cambios_individuales = []
         for diputado in df["diputado"].unique():
             d_normal = df[(df["diputado"] == diputado) & (df["ano_electoral"] == False)]
@@ -125,6 +131,8 @@ def radar_electoral_partido(partido: str) -> tuple[str, list[dict]]:
 
         stats_df = pd.DataFrame([stats_normal, stats_electoral])
 
+        fuentes = url_radar_electoral(partido_match)
+
         reporte = f"""
 RADAR ELECTORAL — {partido_match}
 {'═' * 55}
@@ -140,19 +148,6 @@ Diputados con mayor cambio de comportamiento electoral:
 {cambios_df.head(5).to_string(index=False) if not cambios_df.empty else 'Datos insuficientes para análisis individual'}
         """
 
-        fuentes = [
-            {
-                "votacion_id": "radar",
-                "url": BASE_URL,
-                "label": f"Votaciones nominales {partido_match} — Cámara de Diputados LXV"
-            },
-            {
-                "votacion_id": "ine",
-                "url": "https://www.ine.mx/voto-y-elecciones/elecciones-2024/",
-                "label": "INE — Elecciones 2024"
-            }
-        ]
-
         return reporte.strip(), fuentes
 
     except Exception as e:
@@ -160,10 +155,6 @@ Diputados con mayor cambio de comportamiento electoral:
 
 
 def radar_comparativo_partidos() -> tuple[str, list[dict]]:
-    """
-    Compara cómo cambia el comportamiento de TODOS los partidos
-    en período electoral vs normal.
-    """
     try:
         contexto_df = cargar_contexto_electoral()
         if contexto_df.empty:
@@ -172,15 +163,19 @@ def radar_comparativo_partidos() -> tuple[str, list[dict]]:
         conn = sqlite3.connect(DB_PATH)
         partidos = pd.read_sql(
             "SELECT DISTINCT partido FROM votaciones ORDER BY partido", conn
-        )["partido"].tolist()
+        )
         conn.close()
 
+        partidos_lista = [
+            p for p in partidos["partido"].tolist()
+            if p != "Nueva Alianza"
+        ]
+
         resultados = []
-        for partido in partidos:
+        for partido in partidos_lista:
             reporte, _ = radar_electoral_partido(partido)
-            # Extrae datos clave del reporte
             for linea in reporte.split("\n"):
-                if "AUMENTA" in linea or "REDUCE" in linea or "marginal" in linea or "significativos" in linea:
+                if any(k in linea for k in ["AUMENTA", "REDUCE", "marginal", "significativos"]):
                     resultados.append({
                         "partido": partido,
                         "comportamiento_electoral": linea.strip()
@@ -193,12 +188,7 @@ def radar_comparativo_partidos() -> tuple[str, list[dict]]:
                 })
 
         df = pd.DataFrame(resultados)
-
-        fuentes = [{
-            "votacion_id": "comparativo",
-            "url": BASE_URL,
-            "label": "Radar Electoral Comparativo — Todos los partidos LXV"
-        }]
+        fuentes = url_comparativa_partidos()
 
         reporte = f"""
 RADAR ELECTORAL COMPARATIVO — TODOS LOS PARTIDOS
