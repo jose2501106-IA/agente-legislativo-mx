@@ -6,3 +6,4 @@ __pycache__/
 agente_mx/data/raw/*
 agente_mx/data/processed/*
 .ipynb_checkpoints/
+agente-mx-frontend/
