@@ -262,18 +262,10 @@ def renderizar_citas(texto, fuentes):
 with st.sidebar:
     st.header("🔍 Preguntas de ejemplo")
     preguntas_ejemplo = [
-        "¿Cuantos registros hay en la base de datos?",
-        "¿Que partido tiene mas ausencias?",
-        "Dame el resumen del partido PAN",
-        "¿Que diputados tienen patrones de ausencia frecuente?",
-        "Busca al diputado Garza",
-        "¿Cual es el indice de disciplina de Morena?",
-        "Compara la disciplina entre todos los partidos",
-        "¿Quienes son los diputados mas disidentes del PRI?",
-        "¿Hay contradicciones entre las iniciativas y votos del PAN?",
-        "Analiza las contradicciones politicas de Morena",
-        "¿Cambia el comportamiento electoral de Morena en año electoral?",
-        "Compara el radar electoral de todos los partidos",
+        "¿Cuántos registros hay en la base de datos?",
+        "¿Qué partidos están en la base y cómo se distribuyen sus votos?",
+        "¿Cuál es el índice de disciplina de cada partido?",
+        "¿Cuáles son las votaciones con más votos en contra?",
     ]
     for p in preguntas_ejemplo:
         if st.button(p, use_container_width=True):
